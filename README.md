@@ -3,8 +3,10 @@
 Server-side donut claimer for the [Charlie Walking](https://play.google.com/store/apps/details?id=com.charlie.walking) app.
 Claims the daily / 5k / 10k-step donut rewards against the app's private API — no app interaction, no ads.
 
-> ⚠️ Unofficial client on a private API. This violates the app's ToS (automated access, ad-gate
-> circumvention). Realistic worst case: your account gets flagged/terminated. Use at your own risk.
+> ⚠️ Unofficial client on a private API. The app has no published terms of service
+> (its only legal document is a privacy policy that doesn't restrict API use), but
+> account restriction/termination remains the developer's unilateral right if they
+> notice. Use at your own risk.
 
 ## How it works
 
