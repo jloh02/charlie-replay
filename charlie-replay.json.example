@@ -12,5 +12,8 @@
   "events": {
     "claim_ids": [1, 6, 7],
     "interval_minutes": 60
+  },
+  "missions": {
+    "auto_complete": true
   }
 }

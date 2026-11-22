@@ -12,6 +12,9 @@ Claims the daily / 5k / 10k-step donut rewards against the app's private API —
   Self-renewing chain: Google refresh token (long-lived) → Google access token (1 h) → Charlie JWT (7 d).
 - **Claim**: `POST /api/v3/donut/events` `{"eventId": N}` when the event is `isClaimable`.
   IDs: `1` daily · `6` 5,000 steps · `7` 10,000 steps · `2` ad-bonus (off by default).
+- **Missions**: `GET /api/v3/mission/v2/active`, then `POST /api/v3/mission/{id}/complete`
+  for every mission with `progress.isCompletable` (boosters, monthly honorary,
+  milestones) — rewards: donuts, badges, items.
 - **Steps** are uploaded to the server *by the app on your phone*. Keep the official app
   installed and signed in so step milestones can become claimable.
 
