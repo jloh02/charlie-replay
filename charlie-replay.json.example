@@ -1,0 +1,16 @@
+{
+  "google": {
+    "client_id": "YOUR-CLIENT-ID.apps.googleusercontent.com",
+    "client_secret": "GOCSPX-YOUR-SECRET",
+    "refresh_token": "<google refresh token from bootstrap>"
+  },
+  "charlie": {
+    "base_url": "https://charlieapp-prod.nombs.site/api/v3",
+    "access_token": "<charlie jwt, 7 days>",
+    "refresh_token": "<charlie jwt refresh, 60 days>"
+  },
+  "events": {
+    "claim_ids": [1, 6, 7],
+    "interval_minutes": 60
+  }
+}

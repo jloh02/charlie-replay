@@ -1,0 +1,7 @@
+services:
+  charlie-replay:
+    build: .
+    container_name: charlie-replay
+    restart: unless-stopped
+    volumes:
+      - ./charlie-replay.json:/app/charlie-replay.json
