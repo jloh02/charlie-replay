@@ -22,14 +22,19 @@ Claims the daily / 5k / 10k-step donut rewards against the app's private API —
 
 ## Setup
 
-1. **One-time, on a machine with a browser** — create a desktop OAuth client
-   (console.cloud.google.com → Credentials → *Create OAuth client ID* → *Desktop app*), then:
+1. **One-time, on a machine with a browser** — create a
+   [desktop OAuth client](https://support.google.com/cloud/answer/6158849)
+   (console.cloud.google.com → Credentials → *Create OAuth client ID* → *Desktop app* — no extra fields needed), then:
 
    ```bash
    python3 bootstrap.py <client_id> <client_secret>
    # open the printed URL, pick the Google account your Charlie account uses
    # → writes ./charlie-replay.json and verifies the session
    ```
+
+    This is the standard
+    [OAuth 2.0 for native/desktop apps](https://developers.google.com/identity/protocols/oauth2/native-app)
+    flow (loopback redirect + PKCE); `bootstrap.py` is that flow in ~150 lines.
 
 2. **Run**:
 
