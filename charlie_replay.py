@@ -178,10 +178,13 @@ def complete_mission(cfg, mission):
 
 def mission_pass(cfg):
     if not cfg.get("missions", {}).get("auto_complete", True):
-        return
+        return 0
+    done = 0
     for m in get_active_missions(cfg):
         if m.get("progress", {}).get("isCompletable"):
-            complete_mission(cfg, m)
+            if complete_mission(cfg, m):
+                done += 1
+    return done
 
 
 def claim_event(cfg, event):
@@ -196,12 +199,13 @@ def claim_event(cfg, event):
 
 def claim_pass(cfg):
     want = set(cfg.get("events", {}).get("claim_ids", [1, 6, 7]))
-    claimed_any = False
+    claimed = 0
     for ev in get_events(cfg):
         if ev["id"] in want and ev.get("isClaimable"):
-            claimed_any = claim_event(cfg, ev) or claimed_any
-    mission_pass(cfg)
-    return claimed_any
+            if claim_event(cfg, ev):
+                claimed += 1
+    claimed += mission_pass(cfg)
+    return claimed
 
 
 def status_pass(cfg):
@@ -223,7 +227,9 @@ def run(cfg, loop, interval_min):
     while True:
         try:
             ensure_auth(cfg)
-            claim_pass(cfg)
+            claimed = claim_pass(cfg)
+            balance = api_get(cfg, "/donut/balance")["balance"]
+            log(f"pass ok: claimed {claimed} reward(s), balance={balance}")
         except Exception as e:
             log(f"pass failed: {e}")
         if not loop:
