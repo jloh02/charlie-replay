@@ -29,7 +29,7 @@ expire 7 days after consent. For a long-running daemon, set the client to
 """
 import base64
 import hashlib
-import http.server
+from http.server import BaseHTTPRequestHandler
 import json
 import os
 import secrets
@@ -80,7 +80,7 @@ def oauth_flow(client_id, client_secret, scope, hint):
 
     captured = {}
 
-    class Handler(http.server.BaseHTTPRequestHandler):
+    class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             q = urllib.parse.urlparse(self.path)
             p = urllib.parse.parse_qs(q.query)
