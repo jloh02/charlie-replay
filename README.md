@@ -12,7 +12,7 @@ Claims the daily / 5k / 10k-step donut rewards against the app's private API —
 [console.cloud.google.com](https://console.cloud.google.com):
 
 1. Create a **Desktop OAuth client** (OAuth client ID → Desktop app).
-2. Enable the **Google Health API** (Library).
+2. *(Optional)* Enable the **Google Health API** (Library) — only if you want automatic step syncing. Without it you still claim the daily donut; the 5k/10k step donuts just won't auto-fill.
 3. Set the OAuth consent screen to **In production** (unverified is fine).
    - *This matters:* while it's in *Testing*, refresh tokens expire after **7 days**.
    - *External* production mode needs the **Branding** page filled in first (app name,
@@ -20,20 +20,26 @@ Claims the daily / 5k / 10k-step donut rewards against the app's private API —
      only works with Google Workspace accounts in the same org, not Gmail.
    - After publishing, re-run both bootstraps below so fresh, non-expiring tokens issue.
 
-### 2. Bootstrap, on a machine with a browser
+### 2. Bootstrap login (required), on a machine with a browser
 `bootstrap.py` is the [native OAuth flow](https://developers.google.com/identity/protocols/oauth2/native-app) (~150 lines):
 
 ```bash
 python3 bootstrap.py <client_id> <client_secret>
 # open the printed URL, pick the account your Charlie account uses
 # → writes ./charlie-replay.json and verifies the session
-
-python3 bootstrap.py --health
-# picks the account that has the Google Health app on your phone
-# (may be a different account) → stored in steps.health
 ```
 
-### 3. Run
+### 3. Step sync (optional)
+
+This auto-pushes your phone's step counts to the server so the **5k / 10k donuts** become claimable without the Charlie app on your phone. **Skip it if** you don't run the Google Health app, just want the daily donut, or don't want a second Google grant. (It may use a *different* Google account than your Charlie login.)
+
+```bash
+python3 bootstrap.py --health
+# pick the account that has the Google Health app on your phone
+# → stored in steps.health in charlie-replay.json
+```
+
+### 4. Run
 
 ```bash
 docker compose up -d
@@ -42,7 +48,8 @@ docker compose logs -f
 
 No Docker? `python3 charlie_replay.py --loop`
 
-Keep the Google Health app installed and running on your phone so step data keeps syncing.
+If you set up step sync above, keep the Google Health app installed and running on your
+phone so step data keeps syncing.
 
 ## Ops
 
