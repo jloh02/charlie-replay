@@ -33,6 +33,7 @@ from http.server import BaseHTTPRequestHandler
 import json
 import os
 import secrets
+import socket
 import socketserver
 import sys
 import time
@@ -41,7 +42,6 @@ import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(HERE, "charlie-replay.json")
-REDIRECT_URI = "http://127.0.0.1:8765/callback"
 BASE_URL = "https://charlieapp-prod.nombs.site/api/v3"
 UA = "charlie-flutter/2.18.16"
 
@@ -60,23 +60,29 @@ def http(method, url, headers=None, data=None, timeout=30):
         return e.code, e.read().decode()
 
 
+def _bind_loopback(handler_cls):
+    """Bind a loopback TCPServer on an OS-chosen free port.
+
+    Google's desktop OAuth clients accept any port on 127.0.0.1, so rather
+    than hard-coding 8765 (which collides if anything else is using it) we
+    let the kernel pick a free one. Retries in case the port is stolen
+    between probing and binding.
+    """
+    for _ in range(5):
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+        probe.close()
+        try:
+            return socketserver.TCPServer(("127.0.0.1", port), handler_cls)
+        except OSError:
+            continue
+    raise RuntimeError("could not bind a free loopback port for the OAuth callback")
+
+
 def oauth_flow(client_id, client_secret, scope, hint):
     verifier = secrets.token_urlsafe(64)
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
-    params = {
-        "client_id": client_id,
-        "redirect_uri": REDIRECT_URI,
-        "response_type": "code",
-        "scope": scope,
-        "access_type": "offline",
-        "code_challenge": challenge,
-        "code_challenge_method": "S256",
-        # Always force the account chooser: the browser's "default" account
-        # is the most recently used one, which we can't (and don't want to)
-        # rely on when the two grants may belong to different accounts.
-        "prompt": "select_account",
-    }
-    auth_url = "https://accounts.google.com/o/oauth2/v2/auth?" + urllib.parse.urlencode(params)
 
     captured = {}
 
@@ -97,15 +103,33 @@ def oauth_flow(client_id, client_secret, scope, hint):
         def log_message(self, *a):
             pass
 
+    httpd = _bind_loopback(Handler)
+    port = httpd.server_address[1]
+    redirect_uri = f"http://127.0.0.1:{port}/callback"
+    params = {
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "scope": scope,
+        "access_type": "offline",
+        "code_challenge": challenge,
+        "code_challenge_method": "S256",
+        # Always force the account chooser: the browser's "default" account
+        # is the most recently used one, which we can't (and don't want to)
+        # rely on when the two grants may belong to different accounts.
+        "prompt": "select_account",
+    }
+    auth_url = "https://accounts.google.com/o/oauth2/v2/auth?" + urllib.parse.urlencode(params)
+
     print()
     print("OPEN THIS URL IN YOUR BROWSER:")
     print(f"  {hint}")
     print()
     print(auth_url)
     print()
-    log("waiting for the redirect on 127.0.0.1:8765 ...")
+    log(f"waiting for the redirect on {redirect_uri} ...")
 
-    with socketserver.TCPServer(("127.0.0.1", 8765), Handler) as httpd:
+    with httpd:
         httpd.timeout = 600
         httpd.handle_request()
 
@@ -118,7 +142,7 @@ def oauth_flow(client_id, client_secret, scope, hint):
         "code": captured["code"],
         "grant_type": "authorization_code",
         "code_verifier": verifier,
-        "redirect_uri": REDIRECT_URI,
+        "redirect_uri": redirect_uri,
     }).encode()
     status, text = http("POST", "https://oauth2.googleapis.com/token",
                         {"Content-Type": "application/x-www-form-urlencoded"}, body)
