@@ -46,10 +46,6 @@ and `charlieapp-prod.nombs.site` (Charlie Walking), and nowhere else.
   session tokens as described above. Charlie Walking's own privacy policy applies
   to data sent to that service.
 
-## Contact
-
-Questions about this policy: [YOUR-EMAIL](mailto:YOUR-EMAIL)
-
 ## Changes
 
 If the software's behaviour changes (for example, additional data types are read),
