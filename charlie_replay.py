@@ -7,6 +7,12 @@ completes eligible missions (boosters, monthly honorary, milestones) directly
 against the Charlie Walking API, using a session obtained via Google OAuth
 replay. The session renews itself (Google refresh token -> Charlie JWT).
 
+Also pushes daily step totals to the server (POST /walk/bulk) from the
+Google Health store (the cloud store the Google Health app on your phone
+syncs — phone pedometer, Health Connect and device data), so step
+milestones become claimable without the Charlie app on the phone having to
+sync anything. The deprecated Google Fit REST API is NOT used.
+
 Usage:
   python3 charlie_replay.py --status          # show balance + events + missions
   python3 charlie_replay.py --once            # single claim pass
@@ -18,10 +24,18 @@ Config (charlie-replay.json, same dir):
   "google":  { "client_id": "...", "client_secret": "...", "refresh_token": "..." },
   "charlie": { "base_url": "...", "access_token": "...", "refresh_token": "..." },
   "events":  { "claim_ids": [1, 6, 7], "interval_minutes": 60 },
-  "missions": { "auto_complete": true }
+  "missions": { "auto_complete": true },
+  "steps":   { "enabled": true, "lookback_days": 7,
+               "health": { "enabled": true, "client_id": "...",
+                           "client_secret": "...", "refresh_token": "..." } }
 }
 Event IDs: 1=daily, 6=5k steps, 7=10k steps, 2=ad bonus (opt-in).
 Missions: any active mission with progress.isCompletable is completed.
+Steps: the Health grant (steps.health) is its own OAuth grant — it may be a
+*different* Google account than the Charlie login one — with the
+googlehealth.activity_and_fitness.readonly scope. Obtain it with
+`bootstrap.py --health` (pick the account that has the
+Google Health app on the phone).
 """
 import argparse
 import base64
@@ -33,10 +47,12 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timedelta, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(HERE, "charlie-replay.json")
 UA = "charlie-flutter/2.18.16"
+_steps_off_logged = False  # announce "no Health grant" once per process
 
 
 def log(msg):
@@ -74,13 +90,18 @@ def jwt_exp(token):
         return 0
 
 
-def google_refresh(cfg):
-    """Exchange the Google refresh token for a fresh access token."""
-    g = cfg["google"]
+def google_refresh(creds):
+    """Exchange a Google refresh token for a fresh access token.
+
+    `creds` is a config dict holding client_id/client_secret/refresh_token;
+    access_token/expires_at are updated in place (and saved by the caller).
+    Works for any grant — the Charlie login account or the separate Health
+    account.
+    """
     body = urllib.parse.urlencode({
-        "client_id": g["client_id"],
-        "client_secret": g["client_secret"],
-        "refresh_token": g["refresh_token"],
+        "client_id": creds["client_id"],
+        "client_secret": creds["client_secret"],
+        "refresh_token": creds["refresh_token"],
         "grant_type": "refresh_token",
     }).encode()
     status, text = http("POST", "https://oauth2.googleapis.com/token",
@@ -88,10 +109,10 @@ def google_refresh(cfg):
     if status != 200:
         raise RuntimeError(f"Google token refresh failed: {status} {text[:300]}")
     data = json.loads(text)
-    g["access_token"] = data["access_token"]
+    creds["access_token"] = data["access_token"]
     if "refresh_token" in data:  # rotation
-        g["refresh_token"] = data["refresh_token"]
-    g["expires_at"] = time.time() + data.get("expires_in", 3600)
+        creds["refresh_token"] = data["refresh_token"]
+    creds["expires_at"] = time.time() + data.get("expires_in", 3600)
     log("Google access token refreshed.")
     return data["access_token"]
 
@@ -99,9 +120,10 @@ def google_refresh(cfg):
 def charlie_login(cfg):
     """Replay the app's Google login to get a fresh Charlie JWT pair."""
     base = cfg["charlie"]["base_url"]
-    g_access = cfg["google"].get("access_token")
-    if not g_access or time.time() > cfg["google"].get("expires_at", 0) - 60:
-        g_access = google_refresh(cfg)
+    g = cfg["google"]
+    g_access = g.get("access_token")
+    if not g_access or time.time() > g.get("expires_at", 0) - 60:
+        g_access = google_refresh(g)
     body = json.dumps({"accessToken": g_access, "authorizationCode": "n/a"})
     status, text = http("POST", base + "/auth/login/google",
                         {"Content-Type": "application/json", "User-Agent": UA}, body)
@@ -223,10 +245,157 @@ def status_pass(cfg):
             f"({p.get('currentProgressValue')}/{m.get('threshold')}) reward={m.get('reward')}")
 
 
+# ---------------------------------------------------------------- step sync
+
+# Account timezone per /walk/today ("timezone": "Asia/Singapore"). Fixed
+# UTC+8, no DST — a constant offset is exact, no tz database needed.
+SGT = timezone(timedelta(hours=8))
+HEALTH_ROLLUP_URL = ("https://health.googleapis.com/v4/users/me/dataTypes/"
+                     "steps/dataPoints:dailyRollUp")
+
+
+def sgt_today():
+    return datetime.now(SGT).date()
+
+
+def _civil(date):
+    return {"date": {"year": date.year, "month": date.month, "day": date.day}}
+
+
+def health_daily_rollup(cfg, start_day, end_day_excl):
+    """Reconciled per-day step totals from the Google Health store (the
+    cloud store the Google Health app on the phone syncs — phone pedometer,
+    Health Connect and device data). Uses the separate health-account grant
+    stored in steps.health (its own Google account, independent of the
+    Charlie login account).
+
+    One dailyRollUp call for the whole civil-day range [start_day,
+    end_day_excl). Returns {iso_date: steps} for days that have step data;
+    a day absent from the dict means the store has no steps for it (app
+    wasn't recording), which is different from a real 0-step day.
+    """
+    hc = cfg.get("steps", {}).get("health") or {}
+    if not hc.get("client_id") or not hc.get("refresh_token"):
+        raise RuntimeError("Health grant not configured — run: "
+                           "python3 bootstrap.py --health")
+    if not hc.get("access_token") or time.time() > hc.get("expires_at", 0) - 60:
+        hc_access = google_refresh(hc)
+    else:
+        hc_access = hc["access_token"]
+    payload = {
+        "range": {"start": _civil(start_day), "end": _civil(end_day_excl)},
+        "windowSizeDays": 1,
+    }
+    headers = {"Authorization": "Bearer " + hc_access,
+               "Content-Type": "application/json", "User-Agent": "charlie-replay/1.0"}
+    status, text = http("POST", HEALTH_ROLLUP_URL, headers, json.dumps(payload))
+    if status == 401:  # stale access token: refresh once and retry
+        hc_access = google_refresh(hc)
+        headers["Authorization"] = "Bearer " + hc_access
+        status, text = http("POST", HEALTH_ROLLUP_URL, headers, json.dumps(payload))
+    if status != 200:
+        if status == 403 and "insufficient" in text.lower():
+            raise RuntimeError("Health scope missing — run: "
+                               "python3 bootstrap.py --health")
+        raise RuntimeError(f"Health dailyRollUp failed: {status} {text[:300]}")
+    out = {}
+    for rp in json.loads(text).get("rollupDataPoints", []):
+        if "steps" not in rp:
+            continue  # day with no step data (not even an explicit 0)
+        start = rp["civilStartTime"]["date"]
+        iso = f"{start['year']:04d}-{start['month']:02d}-{start['day']:02d}"
+        out[iso] = int(rp["steps"]["countSum"])
+    return out
+
+
+def steps_pass(cfg):
+    """Push per-day step totals (Google Health store) to /walk/bulk.
+
+    Guarded upsert: a day is only pushed when the Health store has data
+    for it and the total is *higher* than the value the server already
+    holds, so under-counted days get backfilled and today keeps
+    refreshing, but a recorded total is never lowered. Days whose server
+    value can't be read (previous month) are skipped.
+    """
+    global _steps_off_logged
+    st = cfg.setdefault("steps", {})
+    if not st.get("enabled", True):
+        return
+    health_cfg = st.get("health") or {}
+    if not health_cfg.get("enabled", True):
+        return
+    # Step sync is opt-in via the --health bootstrap, which writes the grant
+    # (incl. the refresh token) into steps.health. Without a grant this pass
+    # never runs — announced once, then silent.
+    if not health_cfg.get("refresh_token"):
+        if not _steps_off_logged:
+            _steps_off_logged = True
+            log("steps: no Health grant in config — step sync off "
+                "(run `python3 bootstrap.py --health` to enable)")
+        return
+    lookback = st.get("lookback_days", 7)
+    today = sgt_today()
+
+    try:
+        roll = health_daily_rollup(cfg, today - timedelta(days=lookback),
+                                   today + timedelta(days=1))
+    except RuntimeError as e:
+        log("steps: " + str(e))
+        return
+
+    server = {}
+    try:
+        cal = api_get(cfg, "/walk/calendar/month")
+        for w in cal.get("walks", []):
+            server[w["localDateString"]] = w["steps"]
+    except Exception as e:
+        log(f"steps: server calendar unreadable ({e})")
+    try:
+        t = api_get(cfg, "/walk/today")
+        server[t["localDateString"]] = t["steps"]
+    except Exception as e:
+        log(f"steps: /walk/today unreadable ({e})")
+
+    pushes = []
+    for i in range(lookback, -1, -1):
+        day = today - timedelta(days=i)
+        ds = day.isoformat()
+
+        if ds not in roll:
+            log(f"steps: {ds} no Health data — skipped")
+            continue
+        health_v = roll[ds]
+        if ds not in server:
+            if day != today:
+                log(f"steps: {ds} server value not verifiable (previous month) — skipped")
+                continue
+            log(f"steps: {ds} push {health_v}")
+            pushes.append({"date": ds, "steps": health_v})
+        elif health_v <= server[ds]:
+            log(f"steps: {ds} {health_v} <= server {server[ds]} — not raised")
+        else:
+            log(f"steps: {ds} {server[ds]} -> {health_v}")
+            pushes.append({"date": ds, "steps": health_v})
+
+    # persist any refreshed Health tokens (incl. rotation) for the next run
+    save_config(cfg)
+    if pushes:
+        status, data = api_post(cfg, "/walk/bulk", pushes)
+        if status in (200, 201):
+            log(f"steps: pushed {len(pushes)} day(s) to /walk/bulk")
+        else:
+            log(f"steps: /walk/bulk failed: {status} {json.dumps(data)[:300]}")
+
+
 def run(cfg, loop, interval_min):
     while True:
         try:
             ensure_auth(cfg)
+            if cfg.get("steps", {}).get("enabled", True):
+                try:
+                    steps_pass(cfg)
+                except Exception as e:
+                    log(f"steps pass failed: {e}")
             claimed = claim_pass(cfg)
             balance = api_get(cfg, "/donut/balance")["balance"]
             log(f"pass ok: claimed {claimed} reward(s), balance={balance}")

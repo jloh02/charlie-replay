@@ -15,5 +15,15 @@
   },
   "missions": {
     "auto_complete": true
+  },
+  "steps": {
+    "enabled": true,
+    "lookback_days": 7,
+    "health": {
+      "enabled": true,
+      "client_id": "",
+      "client_secret": "",
+      "refresh_token": ""
+    }
   }
 }
