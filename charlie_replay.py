@@ -68,7 +68,20 @@ def save_config(cfg):
     tmp = CONFIG_PATH + ".tmp"
     with open(tmp, "w") as f:
         json.dump(cfg, f, indent=2)
-    os.replace(tmp, CONFIG_PATH)
+    try:
+        os.replace(tmp, CONFIG_PATH)
+        return
+    except OSError:
+        pass
+    # Atomic rename failed — on Docker's single-file bind mount the config
+    # path is a mount point, and renaming onto one is EBUSY on Linux.
+    # Fall back to a direct in-place write (works through bind mounts).
+    with open(CONFIG_PATH, "w") as f:
+        json.dump(cfg, f, indent=2)
+    try:
+        os.remove(tmp)
+    except OSError:
+        pass
 
 
 def http(method, url, headers=None, data=None, timeout=30):
